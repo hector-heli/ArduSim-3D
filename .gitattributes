@@ -8,7 +8,6 @@
 *.prefab merge=unityyamlmerge eol=lf
 *.asset merge=unityyamlmerge eol=lf
 *.meta merge=unityyamlmerge eol=lf
-
 # Large files
 *.png filter=lfs diff=lfs merge=lfs -text
 *.jpg filter=lfs diff=lfs merge=lfs -text
