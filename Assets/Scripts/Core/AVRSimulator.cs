@@ -63,6 +63,21 @@ public class AVRSimulator : MonoBehaviour
         }
     }
 
+    void Update()
+    {
+        // Solo ejecutar si hay un programa cargado y el simulador está corriendo
+        if (isRunning && hexParser?.programMemory != null && !inDelay)
+        {
+            for (int i = 0; i < instructionsPerFrame; i++)
+            {
+                if (!ExecuteNextInstruction())
+                {
+                    break;
+                }
+            }
+        }
+    }
+
     void InitializeProcessor()
     {
         // Inicializar registros
@@ -144,38 +159,47 @@ public class AVRSimulator : MonoBehaviour
     {
         if (hexParser?.programMemory == null)
             return false;
-
-        // Verificar que tenemos datos en la dirección actual
-        if (!hexParser.programMemory.HasDataAt(programCounter))
-        {
-            if (enableDebug)
-                Debug.LogWarning($"No hay datos en PC: 0x{programCounter:X4}");
-            return false;
-        }
-
-        // Leer instrucción (las instrucciones AVR son de 16 bits)
+            
         ushort instruction = hexParser.programMemory.ReadInstruction(programCounter);
-        
-        if (enableDebug && instructionCount < 50)
-        {
-            Debug.Log($"PC: 0x{programCounter:X4}, Instrucción: 0x{instruction:X4}");
-        }
-        
-        ushort oldPC = programCounter;
-        programCounter += 2; // Las direcciones AVR están en words (2 bytes)
         instructionCount++;
         
-        // Decodificar y ejecutar instrucción
-        bool result = DecodeAndExecute(instruction);
-        
-        // Detectar loops infinitos (mismo PC)
-        if (programCounter == oldPC && instruction != 0x0000)
+        // JMP (32-bit) - 1001 010k kkkk 110k + kkkk kkkk kkkk kkkk
+        if ((instruction & 0xFE0E) == 0x940C)
         {
-            if (enableDebug)
-                Debug.LogWarning($"Posible loop infinito en PC: 0x{oldPC:X4}");
+            ushort nextWord = hexParser.programMemory.ReadInstruction((ushort)(programCounter + 2));
+            uint k = (uint)(((instruction & 0x01F0) << 13) | ((instruction & 0x0001) << 16) | nextWord);
+            programCounter = (ushort)(k * 2);
+            
+            if (enableDebug && instructionCount < 50)
+                Debug.Log($"JMP 0x{k:X8}");
+                
+            return true;
         }
         
-        return result;
+        // CALL (32-bit) - 1001 010k kkkk 111k + kkkk kkkk kkkk kkkk
+        else if ((instruction & 0xFE0E) == 0x940E)
+        {
+            ushort nextWord = hexParser.programMemory.ReadInstruction((ushort)(programCounter + 2));
+            uint k = (uint)(((instruction & 0x01F0) << 13) | ((instruction & 0x0001) << 16) | nextWord);
+            
+            // Guardar dirección de retorno en stack
+            PushStack((ushort)((programCounter + 4) / 2));
+            
+            // Saltar a la subrutina
+            programCounter = (ushort)(k * 2);
+            
+            if (enableDebug && instructionCount < 50)
+                Debug.Log($"CALL 0x{k:X4}");
+                
+            return true;
+        }
+        else
+        {
+            // Instrucciones de 16 bits
+            bool result = DecodeAndExecute(instruction);
+            programCounter += 2;
+            return result;
+        }
     }
 
     bool DecodeAndExecute(ushort instruction)
@@ -270,28 +294,6 @@ public class AVRSimulator : MonoBehaviour
             return true;
         }
         
-        // CALL k (Call Subroutine) - 1001 010k kkkk 111k + kkkk kkkk kkkk kkkk
-        if ((instruction & 0xFE0E) == 0x940E)
-        {
-            // Leer la segunda palabra de la instrucción
-            ushort secondWord = hexParser.programMemory.ReadInstruction(programCounter);
-            programCounter += 2;
-            
-            // Formar la dirección completa
-            uint k = (uint)(((instruction & 0x01F0) << 13) | ((instruction & 0x0001) << 16) | secondWord);
-            
-            // Guardar dirección de retorno en stack
-            PushStack((ushort)(programCounter / 2));
-            
-            // Saltar a la subrutina
-            programCounter = (ushort)(k * 2);
-            
-            if (enableDebug && instructionCount < 50)
-                Debug.Log($"CALL 0x{k:X4}");
-            
-            return true;
-        }
-        
         // RET (Return from Subroutine) - 1001 0101 0000 1000
         if (instruction == 0x9508)
         {
@@ -302,7 +304,18 @@ public class AVRSimulator : MonoBehaviour
             
             return true;
         }
-        
+
+        // JMP (32-bit) - 1001 010k kkkk 110k + kkkk kkkk kkkk kkkk
+        if ((instruction & 0xFE0E) == 0x940C)
+        {
+            ushort nextWord = hexParser.programMemory.ReadInstruction((ushort)(programCounter + 2));
+            uint k = (uint)(((instruction & 0x01F0) << 13) | ((instruction & 0x0001) << 16) | nextWord);
+            programCounter = (ushort)(k * 2); // Salta a la dirección absoluta (en bytes)
+            if (enableDebug && instructionCount < 50)
+                Debug.Log($"JMP 0x{k:X4}");
+            return true;
+        }
+                
         // Simular delay usando una función especial
         // Esto es una simplificación para el programa Blink
         if (programCounter >= 0x160 && programCounter <= 0x180) // Rango aproximado de delay
@@ -436,22 +449,22 @@ public class AVRSimulator : MonoBehaviour
         if (!enableDebug) return;
 
         GUIStyle labelStyle = new GUIStyle(GUI.skin.label);
-        labelStyle.fontSize = 14;
+        labelStyle.fontSize = 40;
         labelStyle.normal.textColor = Color.white;
         
         GUIStyle titleStyle = new GUIStyle(GUI.skin.label);
-        titleStyle.fontSize = 16;
+        titleStyle.fontSize = 64;
         titleStyle.fontStyle = FontStyle.Bold;
         titleStyle.normal.textColor = Color.yellow;
         
         GUIStyle buttonStyle = new GUIStyle(GUI.skin.button);
-        buttonStyle.fontSize = 12;
+        buttonStyle.fontSize = 32;
         
         Texture2D backgroundTexture = MakeBackgroundTexture(new Color(0, 0, 0, 0.8f));
         GUIStyle backgroundStyle = new GUIStyle();
         backgroundStyle.normal.background = backgroundTexture;
         
-        Rect guiRect = new Rect(10, 10, 400, 500);
+        Rect guiRect = new Rect(10, 10, 1200, 2400);
         GUI.Box(guiRect, "", backgroundStyle);
         
         GUILayout.BeginArea(new Rect(guiRect.x + 10, guiRect.y + 10, guiRect.width - 20, guiRect.height - 20));

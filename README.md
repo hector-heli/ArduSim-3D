@@ -218,6 +218,8 @@ Este proyecto está licenciado bajo la Licencia MIT - ver el archivo [LICENSE](L
 
 - **Autor**: [Héctor Helí Ruiz García](https://github.com/hector-heli) 
 - **Issues**: [GitHub Issues](https://github.com/hector-heli/ArduSim-3D/issues)
+
+- **Discussions**: [GitHub Discussions](https://github.com/hector-heli/ArduSim-3D/discussions)
 - **Email**: hectorheli.dev@gmail.com - hh_rg@hotmail.com
 
 ## 🏆 Reconocimientos

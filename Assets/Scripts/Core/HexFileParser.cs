@@ -30,7 +30,7 @@ public class HexFileParser : MonoBehaviour
             return memory.ContainsKey(address) ? memory[address] : (byte)0xFF;
         }
         
-        // Método para leer datos en little-endian (para datos)
+        // Método para leer instrucciones AVR (16 bits, little-endian)
         public ushort ReadWord(ushort address)
         {
             byte low = ReadByte(address);
@@ -38,19 +38,14 @@ public class HexFileParser : MonoBehaviour
             return (ushort)(low | (high << 8));
         }
         
-        // NUEVO: Método específico para leer instrucciones AVR
+        // Método específico para leer instrucciones AVR - CORREGIDO
         public ushort ReadInstruction(ushort address)
         {
-            // AVR almacena las instrucciones en formato específico
-            // Leer dos bytes consecutivos
-            byte firstByte = ReadByte(address);
-            byte secondByte = ReadByte((ushort)(address + 1));
+            if (address % 2 != 0) 
+                throw new ArgumentException("Address must be even");
             
-            // Formar la instrucción de 16 bits
-            // En AVR, las instrucciones se almacenan como little-endian en memoria
-            ushort instruction = (ushort)(firstByte | (secondByte << 8));
-            
-            return instruction;
+            // Usar ReadWord que ya maneja el diccionario correctamente
+            return ReadWord(address);
         }
         
         // Método para verificar si una dirección contiene datos válidos
@@ -75,10 +70,21 @@ public class HexFileParser : MonoBehaviour
             
             return (min, max);
         }
+        
+        // NUEVO: Método para leer la siguiente palabra (para instrucciones de 32 bits)
+        public ushort? ReadNextWord(ushort address)
+        {
+            ushort nextAddr = (ushort)(address + 2);
+            if (HasDataAt(nextAddr) && HasDataAt((ushort)(nextAddr + 1)))
+            {
+                return ReadWord(nextAddr);
+            }
+            return null;
+        }
     }
 
     [Header("Configuración")]
-    public string hexFilePath = "sketch.hex";
+    public string hexFilePath = "Blink.hex";
     public bool loadOnStart = true;
     public bool debugOutput = true;
 
@@ -103,22 +109,27 @@ public class HexFileParser : MonoBehaviour
         
         // Intentar cargar desde diferentes ubicaciones
         string[] possiblePaths = {
-            path,
-            Path.Combine(Application.streamingAssetsPath, path),
             Path.Combine(Application.dataPath, "StreamingAssets", path),
-            Path.Combine(Application.persistentDataPath, path)
+            Path.Combine(Application.streamingAssetsPath, path),
+            Path.Combine(Application.persistentDataPath, path),
+            Path.Combine(Application.dataPath, path), // Directorio Assets
+            path
         };
 
         foreach (string testPath in possiblePaths)
         {
-            Debug.Log($"Intentando cargar archivo HEX desde: {testPath}");
+            if (debugOutput)
+                Debug.Log($"Intentando cargar archivo HEX desde: {testPath}");
+                
             if (File.Exists(testPath))
             {
+                Debug.Log($"Archivo encontrado: {testPath}");
                 return ParseHexFile(testPath);
             }
         }
 
         Debug.LogError($"Archivo HEX no encontrado: {path}");
+        Debug.LogError("Asegúrate de que el archivo Blink.hex esté en la carpeta StreamingAssets");
         return false;
     }
 
@@ -129,6 +140,7 @@ public class HexFileParser : MonoBehaviour
             string[] lines = File.ReadAllLines(filePath);
             hexRecords.Clear();
             programMemory.memory.Clear();
+            programMemory.entryPoint = 0; // AGREGADO: Reset entry point
 
             if (debugOutput)
                 Debug.Log($"Parseando archivo HEX: {filePath} ({lines.Length} líneas)");
@@ -157,21 +169,30 @@ public class HexFileParser : MonoBehaviour
                         if (debugOutput)
                         {
                             Debug.Log($"Fin de archivo HEX. Total bytes cargados: {totalBytes}");
-                            // Mostrar las primeras instrucciones para debug
                             DebugFirstInstructions();
                         }
                         return true;
                         
                     case 0x02: // Extended Segment Address Record
-                        baseAddress = (ushort)(BitConverter.ToUInt16(record.data, 0) << 4);
+                        baseAddress = (ushort)(BitConverter.ToUInt16(new byte[] { record.data[1], record.data[0] }, 0) << 4);
+                        if (debugOutput)
+                            Debug.Log($"Extended Segment Address: 0x{baseAddress:X4}");
                         break;
                         
                     case 0x04: // Extended Linear Address Record
-                        baseAddress = (ushort)(BitConverter.ToUInt16(record.data, 0) << 16);
+                        baseAddress = (ushort)(BitConverter.ToUInt16(new byte[] { record.data[1], record.data[0] }, 0) << 16);
+                        if (debugOutput)
+                            Debug.Log($"Extended Linear Address: 0x{baseAddress:X4}");
                         break;
                         
                     case 0x05: // Start Linear Address Record
-                        programMemory.entryPoint = BitConverter.ToUInt16(record.data, 0);
+                        if (record.dataLength >= 4)
+                        {
+                            // Para AVR, el entry point es típicamente en los primeros 2 bytes
+                            programMemory.entryPoint = BitConverter.ToUInt16(new byte[] { record.data[0], record.data[1] }, 0);
+                        }
+                        if (debugOutput)
+                            Debug.Log($"Entry Point: 0x{programMemory.entryPoint:X4}");
                         break;
                 }
             }
@@ -180,6 +201,7 @@ public class HexFileParser : MonoBehaviour
             {
                 Debug.Log($"Archivo HEX cargado exitosamente. Total bytes: {totalBytes}");
                 DebugFirstInstructions();
+                DebugMemoryRange();
             }
             
             return true;
@@ -255,118 +277,212 @@ public class HexFileParser : MonoBehaviour
             programMemory.WriteByte((ushort)(address + i), record.data[i]);
         }
         
-        if (debugOutput && record.dataLength > 0)
-        {
-            Debug.Log($"Cargados {record.dataLength} bytes en dirección 0x{address:X4}");
-        }
+        // if (debugOutput && record.dataLength > 0)
+        // {
+        //     Debug.Log($"Cargados {record.dataLength} bytes en dirección 0x{address:X4}");
+        // }
     }
 
-    // NUEVO: Método para debug de las primeras instrucciones
+    // Método mejorado para debug de las primeras instrucciones
     private void DebugFirstInstructions()
     {
-        Debug.Log("=== PRIMERAS INSTRUCCIONES ===");
-        for (ushort addr = 0; addr < 16; addr += 2)
+        Debug.Log("=== PRIMERAS INSTRUCCIONES DEL PROGRAMA ===");
+        
+        // Mostrar las primeras 10 instrucciones
+        for (ushort addr = 0; addr < programMemory.GetMemoryRange().max; addr += 2)
         {
             if (programMemory.HasDataAt(addr) && programMemory.HasDataAt((ushort)(addr + 1)))
             {
                 ushort instruction = programMemory.ReadInstruction(addr);
-                Debug.Log($"PC: 0x{addr:X4} -> Instrucción: 0x{instruction:X4}");
+                string disassembly = DisassembleInstruction(addr); // CORREGIDO: pasar dirección
+                Debug.Log($"0x{addr:X4}: 0x{instruction:X4} -> {disassembly}");
+                if (disassembly.StartsWith("JMP") || disassembly.StartsWith("CALL")) addr += 2;
             }
         }
     }
 
-    // Métodos públicos para acceder a la memoria del programa
-    public byte GetProgramByte(ushort address)
+    // Método para debug del rango de memoria
+    private void DebugMemoryRange()
     {
-        return programMemory.ReadByte(address);
+        var (min, max) = programMemory.GetMemoryRange();
+        Debug.Log($"Rango de memoria cargada: 0x{min:X4} - 0x{max:X4}");
+        Debug.Log($"Total de bytes en memoria: {programMemory.memory.Count}");
     }
 
-    public ushort GetProgramWord(ushort address)
+    // Desensamblador básico para debug - CORREGIDO
+    public string DisassembleInstruction(ushort address)
     {
-        return programMemory.ReadWord(address);
-    }
-    
-    // NUEVO: Método específico para obtener instrucciones
-    public ushort GetInstruction(ushort address)
-    {
-        return programMemory.ReadInstruction(address);
-    }
-
-    public void DumpMemory(ushort startAddress = 0, int length = 256)
-    {
-        Debug.Log($"=== DUMP DE MEMORIA (0x{startAddress:X4} - 0x{(startAddress + length):X4}) ===");
+        ushort instruction = programMemory.ReadInstruction(address);
         
-        for (int i = 0; i < length; i += 16)
-        {
-            string line = $"0x{(startAddress + i):X4}: ";
-            
-            for (int j = 0; j < 16 && (i + j) < length; j++)
-            {
-                byte value = programMemory.ReadByte((ushort)(startAddress + i + j));
-                line += $"{value:X2} ";
-            }
-            
-            Debug.Log(line);
-        }
-    }
-    
-    // NUEVO: Dump específico para instrucciones
-    public void DumpInstructions(ushort startAddress = 0, int count = 16)
-    {
-        Debug.Log($"=== DUMP DE INSTRUCCIONES (desde 0x{startAddress:X4}) ===");
+        // NOP
+        if (instruction == 0x0000)
+            return "NOP";
         
-        for (int i = 0; i < count; i++)
+        // LDI Rd, K (Load Immediate) - 1110 KKKK dddd KKKK
+        if ((instruction & 0xF000) == 0xE000)
         {
-            ushort addr = (ushort)(startAddress + (i * 2));
-            if (programMemory.HasDataAt(addr))
-            {
-                ushort instruction = programMemory.ReadInstruction(addr);
-                Debug.Log($"PC: 0x{addr:X4} -> 0x{instruction:X4}");
-            }
+            byte rd = (byte)(16 + ((instruction >> 4) & 0x0F));
+            byte k = (byte)(((instruction >> 4) & 0xF0) | (instruction & 0x0F));
+            return $"LDI R{rd}, 0x{k:X2}";
         }
+        
+        // OUT A, Rr - 1011 1AAr rrrr AAAA
+        if ((instruction & 0xF800) == 0xB800)
+        {
+            byte rr = (byte)((instruction >> 4) & 0x1F);
+            byte a = (byte)(((instruction >> 5) & 0x30) | (instruction & 0x0F));
+            return $"OUT 0x{a:X2}, R{rr}";
+        }
+        
+        // SBI A, b - 1001 1010 AAAA Abbb
+        if ((instruction & 0xFF00) == 0x9A00)
+        {
+            byte a = (byte)((instruction >> 3) & 0x1F);
+            byte b = (byte)(instruction & 0x07);
+            return $"SBI 0x{a:X2}, {b}";
+        }
+        
+        // CBI A, b - 1001 1000 AAAA Abbb
+        if ((instruction & 0xFF00) == 0x9800)
+        {
+            byte a = (byte)((instruction >> 3) & 0x1F);
+            byte b = (byte)(instruction & 0x07);
+            return $"CBI 0x{a:X2}, {b}";
+        }
+        
+        
+        // RET - 1001 0101 0000 1000
+        if (instruction == 0x9508)
+            return "RET";
+        
+        // BRNE k - 1111 01kk kkkk k001
+        if ((instruction & 0xFC07) == 0xF401)
+        {
+            sbyte k = (sbyte)((instruction >> 3) & 0x7F);
+            if (k > 63) k = (sbyte)(k - 128);
+            return $"BRNE {k}";
+        }
+        
+        // ADD Rd, Rr - 0000 11rd dddd rrrr
+        if ((instruction & 0xFC00) == 0x0C00)
+        {
+            byte rd = (byte)((instruction >> 4) & 0x1F);
+            byte rr = (byte)(((instruction >> 5) & 0x10) | (instruction & 0x0F));
+            return $"ADD R{rd}, R{rr}";
+        }
+        
+        // SUB Rd, Rr - 0001 10rd dddd rrrr
+        if ((instruction & 0xFC00) == 0x1800)
+        {
+            byte rd = (byte)((instruction >> 4) & 0x1F);
+            byte rr = (byte)(((instruction >> 5) & 0x10) | (instruction & 0x0F));
+            return $"SUB R{rd}, R{rr}";
+        }
+        
+        // MOV Rd, Rr - 0010 11rd dddd rrrr
+        if ((instruction & 0xFC00) == 0x2C00)
+        {
+            byte rd = (byte)((instruction >> 4) & 0x1F);
+            byte rr = (byte)(((instruction >> 5) & 0x10) | (instruction & 0x0F));
+            return $"MOV R{rd}, R{rr}";
+        }
+        
+        // CP Rd, Rr - 0001 01rd dddd rrrr
+        if ((instruction & 0xFC00) == 0x1400)
+        {
+            byte rd = (byte)((instruction >> 4) & 0x1F);
+            byte rr = (byte)(((instruction >> 5) & 0x10) | (instruction & 0x0F));
+            return $"CP R{rd}, R{rr}";
+        }
+        
+        // DEC Rd - 1001 010d dddd 1010
+        if ((instruction & 0xFE0F) == 0x940A)
+        {
+            byte rd = (byte)((instruction >> 4) & 0x1F);
+            return $"DEC R{rd}";
+        }
+
+        // RJMP k - 1100 kkkk kkkk kkkk
+        if ((instruction & 0xF000) == 0xC000)
+        {
+            short k = (short)(instruction & 0x0FFF);
+            if (k > 0x7FF) k = (short)(k - 0x1000);
+            return $"RJMP {k}";
+        }
+        
+        // CALL k - 1001 010k kkkk 111k (primera palabra)
+        if ((instruction & 0xFE0E) == 0x940E)
+        {
+            ushort? nextWord = programMemory.ReadNextWord(address);
+            if (nextWord.HasValue)
+            {
+                uint fullAddress = (uint)((instruction & 0x01F1) << 16 | nextWord.Value);
+                return $"CALL 0x{fullAddress:X6}";
+            }
+            return "CALL (32-bit, incomplete)";
+        }
+
+        // JMP k (32-bit) - 1001 010k kkkk 110k  kkkk kkkk kkkk kkkk
+        if ((instruction & 0xFE0E) == 0x940C)
+        {
+            ushort? nextWord = programMemory.ReadNextWord(address);
+            if (nextWord.HasValue)
+            {
+                uint fullAddress = (uint)(((instruction & 0x01F0) << 13) | ((instruction & 0x0001) << 16) | nextWord.Value);
+                Debug.Log($"{fullAddress*2}");
+                fullAddress *= 2;
+                return $"JMP 0x{fullAddress:X2}";
+            }
+            return "JMP (32-bit, incomplete)";
+        }
+        
+        return $"UNKNOWN (0x{instruction:X4})";
     }
 
-    // Método para cargar archivo desde el editor
+    // Métodos públicos para acceso externo
     [ContextMenu("Cargar Archivo HEX")]
-    public void LoadHexFromMenu()
+    public void LoadHexFileFromMenu()
     {
         LoadHexFile();
     }
 
-    [ContextMenu("Dump Memoria")]
-    public void DumpMemoryFromMenu()
+    [ContextMenu("Debug Primeras Instrucciones")]
+    public void DebugFirstInstructionsFromMenu()
+    {
+        if (programMemory != null)
+            DebugFirstInstructions();
+    }
+
+    [ContextMenu("Debug Rango de Memoria")]
+    public void DebugMemoryRangeFromMenu()
+    {
+        if (programMemory != null)
+            DebugMemoryRange();
+    }
+
+    // Métodos para acceso desde otros scripts
+    public bool IsLoaded()
+    {
+        return programMemory != null && programMemory.memory.Count > 0;
+    }
+
+    public int GetLoadedInstructionCount()
+    {
+        if (programMemory == null) return 0;
+        return programMemory.memory.Count / 2; // Cada instrucción AVR son 2 bytes
+    }
+
+    public void ClearMemory()
     {
         if (programMemory != null)
         {
-            DumpMemory(0, 512);
+            programMemory.memory.Clear();
+            programMemory.entryPoint = 0;
         }
-    }
-    
-    [ContextMenu("Dump Instrucciones")]
-    public void DumpInstructionsFromMenu()
-    {
-        if (programMemory != null)
-        {
-            DumpInstructions(0, 32);
-        }
-    }
-
-    // Información estadística
-    public int GetLoadedBytesCount()
-    {
-        return programMemory?.memory.Count ?? 0;
-    }
-
-    public ushort GetHighestAddress()
-    {
-        ushort highest = 0;
-        if (programMemory?.memory != null)
-        {
-            foreach (var address in programMemory.memory.Keys)
-            {
-                if (address > highest) highest = address;
-            }
-        }
-        return highest;
+        
+        if (hexRecords != null)
+            hexRecords.Clear();
+            
+        Debug.Log("Memoria del programa limpiada");
     }
 }

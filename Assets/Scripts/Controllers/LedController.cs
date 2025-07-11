@@ -11,8 +11,8 @@ public class LEDController : MonoBehaviour
     public float glowIntensity = 2.0f;
     
     [Header("Components")]
-    private Renderer ledRenderer;
-    private Light ledLight;
+    public Renderer ledRenderer;
+    public Light ledLight;
     
     [Header("Animation")]
     public bool smoothTransition = true;
@@ -26,14 +26,15 @@ public class LEDController : MonoBehaviour
         // Obtener componentes
         ledRenderer = GetComponent<Renderer>();
         ledLight = GetComponent<Light>();
-        
+
         // Crear luz si no existe
         if (ledLight == null)
         {
-            ledLight = gameObject.AddComponent<Light>();
-            ledLight.type = LightType.Point;
-            ledLight.range = 3.0f;
-            ledLight.intensity = 0;
+            ledLight = FindObjectOfType<Light>();
+        //     ledLight = gameObject.AddComponent<Light>();
+            //     ledLight.type = LightType.Point;
+            //     ledLight.range = 3.0f;
+            //     ledLight.intensity = 0;
         }
         
         // Configurar material emisivo si no existe
@@ -55,14 +56,14 @@ public class LEDController : MonoBehaviour
         {
             Color currentColor = ledRenderer.material.color;
             Color newColor = Color.Lerp(currentColor, targetColor, Time.deltaTime * transitionSpeed);
-            
+
             ledRenderer.material.color = newColor;
-            
+
             if (ledRenderer.material.HasProperty("_EmissionColor"))
             {
                 Color emissionColor = currentState ? onColor * glowIntensity : Color.black;
-                ledRenderer.material.SetColor("_EmissionColor", 
-                    Color.Lerp(ledRenderer.material.GetColor("_EmissionColor"), emissionColor, 
+                ledRenderer.material.SetColor("_EmissionColor",
+                    Color.Lerp(ledRenderer.material.GetColor("_EmissionColor"), emissionColor,
                     Time.deltaTime * transitionSpeed));
             }
         }
@@ -93,7 +94,7 @@ public class LEDController : MonoBehaviour
         {
             ledLight.enabled = state;
             ledLight.color = onColor;
-            ledLight.intensity = state ? 1.0f : 0.0f;
+            ledLight.intensity = state ? 7.0f : 0.0f;
         }
         
         Debug.Log("LED " + (state ? "ENCENDIDO" : "APAGADO"));
