@@ -309,7 +309,7 @@ public class HexFileParser : MonoBehaviour
         Debug.Log($"Total de bytes en memoria: {programMemory.memory.Count}");
     }
 
-    // Desensamblador básico para debug - CORREGIDO
+    // Desensamblador básico para debug
     public string DisassembleInstruction(ushort address)
     {
         ushort instruction = programMemory.ReadInstruction(address);
@@ -409,6 +409,14 @@ public class HexFileParser : MonoBehaviour
             if (k > 0x7FF) k = (short)(k - 0x1000);
             return $"RJMP {k}";
         }
+
+        // EOR Rd, Rr - 0010 01rd dddd rrrr
+        if ((instruction & 0xFC00) == 0x2400)
+        {
+            byte rd = (byte)((instruction >> 4) & 0x1F);
+            byte rr = (byte)(((instruction >> 5) & 0x10) | (instruction & 0x0F));
+            return $"EOR R{rd}, R{rr}";
+        }
         
         // CALL k - 1001 010k kkkk 111k (primera palabra)
         if ((instruction & 0xFE0E) == 0x940E)
@@ -429,7 +437,6 @@ public class HexFileParser : MonoBehaviour
             if (nextWord.HasValue)
             {
                 uint fullAddress = (uint)(((instruction & 0x01F0) << 13) | ((instruction & 0x0001) << 16) | nextWord.Value);
-                Debug.Log($"{fullAddress*2}");
                 fullAddress *= 2;
                 return $"JMP 0x{fullAddress:X2}";
             }
