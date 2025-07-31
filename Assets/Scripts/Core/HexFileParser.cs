@@ -164,7 +164,7 @@ public class HexFileParser : MonoBehaviour
                         LoadDataRecord(record, baseAddress);
                         totalBytes += record.dataLength;
                         break;
-                        
+
                     case 0x01: // End of File Record
                         if (debugOutput)
                         {
@@ -290,13 +290,17 @@ public class HexFileParser : MonoBehaviour
         
         // Mostrar las primeras 10 instrucciones
         for (ushort addr = 0; addr < programMemory.GetMemoryRange().max; addr += 2)
+        //for (ushort addr = 184; addr < 500; addr += 2)
         {
             if (programMemory.HasDataAt(addr) && programMemory.HasDataAt((ushort)(addr + 1)))
             {
                 ushort instruction = programMemory.ReadInstruction(addr);
                 string disassembly = DisassembleInstruction(addr); // CORREGIDO: pasar dirección
                 Debug.Log($"0x{addr:X4}: 0x{instruction:X4} -> {disassembly}");
-                if (disassembly.StartsWith("JMP") || disassembly.StartsWith("CALL")) addr += 2;
+                // UNKNOWN: Si la instrucción no se reconoce, mostrarla
+                // if (disassembly.StartsWith("UNKNOWN")) Debug.Log($"0x{addr:X4}: 0x{instruction:X4} -> {disassembly}");
+
+                if (disassembly.StartsWith("JMP") || disassembly.StartsWith("CALL") || disassembly.StartsWith("STS") || disassembly.StartsWith("LDS")) addr += 2;
             }
         }
     }
@@ -313,10 +317,66 @@ public class HexFileParser : MonoBehaviour
     public string DisassembleInstruction(ushort address)
     {
         ushort instruction = programMemory.ReadInstruction(address);
+
+        // Instrucciones de 32 bits
+
+        // STS k,Rr - Store Direct to Data Space - 1001 001d dddd 0000 kkkk kkkk kkkk kkkk
+        if ((instruction & 0xFE0F) == 0x9200)
+        {
+            ushort? nextWord = programMemory.ReadNextWord(address);
+            if (nextWord.HasValue)
+            {
+                byte rd = (byte)((instruction >> 4) & 0x1F);
+                ushort fullAddress = nextWord.Value;
+                return $"STS 0x{fullAddress:X4}, R{rd}";
+            }
+        } 
+
+        // CALL k - 1001 010k kkkk 111k (primera palabra)
+        if ((instruction & 0xFE0E) == 0x940E)
+        {
+            ushort? nextWord = programMemory.ReadNextWord(address);
+            if (nextWord.HasValue)
+            {
+                uint fullAddress = (uint)((instruction & 0x01F1) << 16 | nextWord.Value);
+                return $"CALL 0x{fullAddress:X6}";
+            }
+            return "CALL (32-bit, incomplete)";
+        }
+
+        // JMP k (32-bit) - 1001 010k kkkk 110k  kkkk kkkk kkkk kkkk
+        if ((instruction & 0xFE0E) == 0x940C)
+        {
+            ushort? nextWord = programMemory.ReadNextWord(address);
+            if (nextWord.HasValue)
+            {
+                uint fullAddress = (uint)(((instruction & 0x01F0) << 13) | ((instruction & 0x0001) << 16) | nextWord.Value);
+                fullAddress *= 2;
+                return $"JMP 0x{fullAddress:X2}";
+            }
+            return "JMP (32-bit, incomplete)";
+        }
+        // LDS Load Direct from Data Space - 1001 000d dddd 0000 kkkk kkkk kkkk kkkk
+        if ((instruction & 0xFE0F) == 0x9000)
+        {
+            ushort? nextWord = programMemory.ReadNextWord(address);
+            if (nextWord.HasValue)
+            {
+                byte rd = (byte)((instruction >> 4) & 0x1F);
+                ushort fullAddress = nextWord.Value;
+                return $"LDS R{rd}, 0x{fullAddress:X4}";
+            }
+        }
+
+        // Instrucciones de 16 bits
         
         // NOP
-        if (instruction == 0x0000)
+        if ((instruction & 0XFF00) == 0x0000)
             return "NOP";
+
+        // SEI - Set Global Interrupt Flag - 1001 0100 0111 1000
+        if (instruction == 0x9478)
+            return "SEI";
         
         // LDI Rd, K (Load Immediate) - 1110 KKKK dddd KKKK
         if ((instruction & 0xF000) == 0xE000)
@@ -349,18 +409,262 @@ public class HexFileParser : MonoBehaviour
             byte b = (byte)(instruction & 0x07);
             return $"CBI 0x{a:X2}, {b}";
         }
+
+        // ST X+, Rr - 1001 001r rrrr 1101
+
+        if ((instruction & 0xFE0F) == 0x920D)
+        {
+            byte rr = (byte)((instruction >> 4) & 0x1F);
+            return $"ST X+, R{rr}";
+        }
+
+        // CPI Rd, K (Compare Immediate) - 1111 KKKK dddd KKKK
+        if ((instruction & 0xF000) == 0x3000)
+        {
+            byte rd = (byte)(16 + ((instruction >> 4) & 0x0F));
+            byte k = (byte)(((instruction >> 4) & 0xF0) | (instruction & 0x0F));
+            return $"CPI R{rd}, 0x{k:X2}";
+        }
+
+        // CPC Rd, Rr (Compare with Carry) - 0000 01rd dddd rrrr
+        if ((instruction & 0xFC00) == 0x0400)
+        {
+            byte rd = (byte)((instruction >> 4) & 0x1F);
+            byte rr = (byte)(((instruction >> 5) & 0x10) | (instruction & 0x0F));
+            return $"CPC R{rd}, R{rr}";
+        }
+
+        // MOVW Rd, Rr - 0000 0001 dddd rrrr
+        if ((instruction & 0xFF00) == 0x0100)   
+        {
+            byte rd = (byte)(2*(instruction >> 4 & 0x0F));
+            byte rr = (byte)(2*(instruction & 0x0F));
+            return $"MOVW R{rd}, R{rr}";
+        }
         
-        
+        // SUBI Rd, K (Subtract Immediate) - 0101 KKKK dddd KKKK
+        if ((instruction & 0xF000) == 0x5000)
+        {
+            byte rd = (byte)(16 + ((instruction >> 4) & 0x0F));
+            byte k = (byte)(((instruction >> 4) & 0xF0) | (instruction & 0x0F));
+            return $"SUBI R{rd}, 0x{k:X2}";
+        }
+
+        // ADIW Rd+1:Rd,K (Add Immediate to Word) - 1001 0110 KKdd KKKK
+        if ((instruction & 0xFF00) == 0x9600)
+        {
+            byte rd = (byte)(24 + ((instruction >> 4) & 0x03)*2);
+            byte k = (byte)(((instruction >> 2) & 0x30) | (instruction & 0x0F));
+            return $"ADIW R{rd}, 0x{k:X2}";
+        }
+
+        // SBCI Rd, K (Subtract with Carry Immediate) - 0100 KKKK dddd KKKK
+        if ((instruction & 0xF000) == 0x4000)
+        {
+            byte rd = (byte)(16 + ((instruction >> 4) & 0x0F));
+            byte k = (byte)(((instruction >> 4) & 0xF0) | (instruction & 0x0F));
+            return $"SBCI R{rd}, 0x{k:X2}";
+        }
+
+        // SBC Rd, Rr (Subtract with Carry) - 0000 10rd dddd rrrr 
+        if ((instruction & 0xFC00) == 0x0800)
+        {
+            byte rd = (byte)((instruction >> 4) & 0x1F);
+            byte rr = (byte)(((instruction >> 5) & 0x10) | (instruction & 0x0F));
+            return $"SBC R{rd}, R{rr}";
+        }
+
+        // MULS Rd, Rr - Multiply Signed - 0000 0010 dddd rrrr
+        if ((instruction & 0xFF00) == 0x0200)
+        {
+            byte rd = (byte)(16+((instruction >> 4) & 0x0F));
+            byte rr = (byte)(16+(instruction & 0x0F));
+            return $"MULS R{rd}, R{rr}";
+        }
+
+        // MULSU Rd, Rr - Multiply with Unsigned - 0000 0011 0ddd 0rrr
+        if ((instruction & 0xFF88) == 0x0300)
+        {
+            byte rd = (byte)(16+((instruction >> 4) & 0x0F));
+            byte rr = (byte)(16+(instruction & 0x0F));
+            return $"MULSU R{rd}, R{rr}";
+        }
+
+        // POP Rd - Pop Register from Stack - 1001 000d dddd 1111
+        if ((instruction & 0xFE0F) == 0x900F)
+        {
+            byte rd = (byte)((instruction >> 4) & 0x1F);
+            return $"POP R{rd}";
+        }
+
+        // PUSH Rr - Push Register onto Stack - 1001 001d rrrr 1111
+        if ((instruction & 0xFE0F) == 0x920F)
+        {
+            byte rr = (byte)((instruction >> 4) & 0x1F);
+            return $"PUSH R{rr}";
+        }
+
+        // LPM Rd, Z - (Loads one byte pointed to by the Z-register into the destination register Rd) - 1001 000d dddd 0100
+        if ((instruction & 0xFE0F) == 0x9004 || (instruction & 0xFE0F) == 0x9005)
+        {
+            byte rd = (byte)((instruction >> 4) & 0x1F);
+            return (instruction & 0xFE0F) == 0x9004 ? $"LPM R{rd}, Z" : $"LPM R{rd}, Z+";
+        }
+
+        // AND Rd, Rr - Logical AND - 0010 00rd dddd rrrr
+        if ((instruction & 0xFC00) == 0x2000)
+        {
+            byte rd = (byte)((instruction >> 4) & 0x1F);
+            byte rr = (byte)(((instruction >> 5) & 0x10) | (instruction & 0x0F));
+            return $"AND R{rd}, R{rr}";
+        }
+
+        // ANDI Rd, K - Logical AND Immediate - 0110 KKKK dddd KKKK
+        if ((instruction & 0xF000) == 0x7000)
+        {
+            byte rd = (byte)(16 + ((instruction >> 4) & 0x0F));
+            byte k = (byte)(((instruction >> 4) & 0xF0) | (instruction & 0x0F));
+            return $"ANDI R{rd}, 0x{k:X2}";
+        }   
+
+        // OR Rd, Rr - Logical OR - 0010 10rd dddd rrrr
+        if ((instruction & 0xFC00) == 0x2800)
+        {
+            byte rd = (byte)((instruction >> 4) & 0x1F);
+            byte rr = (byte)(((instruction >> 5) & 0x10) | (instruction & 0x0F));
+            return $"OR R{rd}, R{rr}";
+        }
+
+        // ORI Rd, K - Logical OR Immediate - 0110 KKKK dddd KKKK
+        if ((instruction & 0xF000) == 0x6000)
+        {
+            byte rd = (byte)(16 + ((instruction >> 4) & 0x0F));
+            byte k = (byte)(((instruction >> 4) & 0xF0) | (instruction & 0x0F));
+            return $"ORI R{rd}, 0x{k:X2}";
+        }
+
+        // COM Rd - Complement Register - 1001 010d dddd 0000
+        if ((instruction & 0xFE0F) == 0x9400)
+        {
+            byte rd = (byte)((instruction >> 4) & 0x1F);
+            return $"COM R{rd}";
+        }
+
+        //INC Rd - Increment Register - 1001 010d dddd 0011
+        if ((instruction & 0xFE0F) == 0x9403)
+        {
+            byte rd = (byte)((instruction >> 4) & 0x1F);
+            return $"INC R{rd}";
+        } 
+
+        // ADC Rd, Rr – Add with Carry - 0001 11rd dddd rrrr
+        if ((instruction & 0xFC00) == 0x1C00)
+        {
+            byte rd = (byte)((instruction >> 4) & 0x1F);
+            byte rr = (byte)(((instruction >> 5) & 0x10) | (instruction & 0x0F));
+            return $"ADC R{rd}, R{rr}";
+        }
+
+        // IN Rd, A - Load an I/O Location to Register - 1011 0AAd dddd AAAA
+        if ((instruction & 0xF800) == 0xB000)
+        {
+            byte rd = (byte)((instruction >> 4) & 0x1F);
+            byte a = (byte)((instruction>>5) & 0x30 |(instruction) & 0x0F);
+            return $"IN R{rd}, 0x{a:X2}";
+        }
+
+        // LD rD, * - Load Indirect From Data Space to Register using X, Y or Z - 1001 000d dddd 1101
+        if ((instruction & 0xFE0F) == 0x900C || (instruction & 0xFE0F) == 0x9008 || (instruction & 0xFE0F) == 0x8000)
+        {
+            // X: 1001 000d dddd 1100
+            // Y: 1001 000d dddd 1000
+            // Z: 1000 000d dddd 0000
+            byte rd; 
+
+            switch (instruction & 0xFE0F)
+            {
+                case 0x900C: rd = (byte)((instruction >> 4) & 0x1F); return $"LD R{rd},X";
+                case 0x9008: rd = (byte)((instruction >> 4) & 0x1F); return $"LD R{rd},Y";
+                case 0x8000: rd = (byte)((instruction >> 4) & 0x1F); return $"LD R{rd},Z";
+                default: return "UNKNOWN LD";
+            }
+        }
+
+        // ST *+ rR - Store Indirect to Data Space using X, Y or Z - 1001 001r rrrr 1100
+        if ((instruction & 0xFE0F) == 0x920C || (instruction & 0xFE0F) == 0x8208 || (instruction & 0xFE0F) == 0x8200)
+        {
+            // X: 1001 001r rrrr 1100
+            // Y: 1000 001r rrrr 1000
+            // Z: 1000 001r rrrr 0000
+            byte rr;
+
+            switch (instruction & 0xFE0F)
+            {
+                case 0x920C: rr = (byte)((instruction >> 4) & 0x1F); return $"ST X, R{rr}";
+                case 0x9208: rr = (byte)((instruction >> 4) & 0x1F); return $"ST Y, R{rr}";
+                case 0x8200: rr = (byte)((instruction >> 4) & 0x1F); return $"ST Z, R{rr}";
+                default: return "UNKNOWN ST";
+            }
+        }   
+
+        // CLI - Clear Global Interrupt Flag - 1001 0100 1111 1000
+        if (instruction == 0x94F8)
+            return "CLI";
+
         // RET - 1001 0101 0000 1000
         if (instruction == 0x9508)
             return "RET";
+            
+        // RETI - 1001 0101 0000 1001
+        if (instruction == 0x9518)
+            return "RETI";
+
+        // BREQ k - Branch if Equal - 1111 00kk kkkk k001
+        if ((instruction & 0xFC07) == 0xF001)
+        {
+            sbyte k = (sbyte)((instruction >> 3) & 0x7F);
+            if (k > 63) k = (sbyte)(k - 128);
+            return $"BREQ {k * 2}";
+        }
         
         // BRNE k - 1111 01kk kkkk k001
         if ((instruction & 0xFC07) == 0xF401)
         {
             sbyte k = (sbyte)((instruction >> 3) & 0x7F);
             if (k > 63) k = (sbyte)(k - 128);
-            return $"BRNE {k}";
+            return $"BRNE {k*2}";
+        }
+
+        // BRCC k - Branch if Carry Cleared - 1111 01kk kkkk k000
+        if ((instruction & 0xFC07) == 0xF400)
+        {
+            sbyte k = (sbyte)((instruction >> 3) & 0x7F);
+            if (k > 63) k = (sbyte)(k - 128);
+            return $"BRCC .{k*2}";
+        }
+
+        // BRCS k - Branch if Carry Set - 1111 00kk kkkk k000
+        if ((instruction & 0xFC07) == 0xF000)
+        {
+            sbyte k = (sbyte)((instruction >> 3) & 0x7F);
+            if (k > 63) k = (sbyte)(k - 128);
+            return $"BRCS .{k*2}";
+        }
+
+        // CPSE Rd,Rr - Compare and Skip if Equal - 0000 00rd dddd rrrr
+        if ((instruction & 0xFC00) == 0x1000)
+        {
+            byte rd = (byte)((instruction >> 4) & 0x1F);
+            byte rr = (byte)(((instruction >> 5) & 0x10) | (instruction & 0x0F));
+            return $"CPSE R{rd}, R{rr}";
+        }
+
+        // SBIS A, b - Skip if Bit in I/O Register Set - 1001 1011 AAAA Abbb
+        if ((instruction & 0xFF00) == 0x9B00)
+        {
+            byte a = (byte)((instruction >> 3) & 0x1F);
+            byte b = (byte)(instruction & 0x07);
+            return $"SBIS 0x{a:X2}, {b}";
         }
         
         // ADD Rd, Rr - 0000 11rd dddd rrrr
@@ -418,30 +722,7 @@ public class HexFileParser : MonoBehaviour
             return $"EOR R{rd}, R{rr}";
         }
         
-        // CALL k - 1001 010k kkkk 111k (primera palabra)
-        if ((instruction & 0xFE0E) == 0x940E)
-        {
-            ushort? nextWord = programMemory.ReadNextWord(address);
-            if (nextWord.HasValue)
-            {
-                uint fullAddress = (uint)((instruction & 0x01F1) << 16 | nextWord.Value);
-                return $"CALL 0x{fullAddress:X6}";
-            }
-            return "CALL (32-bit, incomplete)";
-        }
-
-        // JMP k (32-bit) - 1001 010k kkkk 110k  kkkk kkkk kkkk kkkk
-        if ((instruction & 0xFE0E) == 0x940C)
-        {
-            ushort? nextWord = programMemory.ReadNextWord(address);
-            if (nextWord.HasValue)
-            {
-                uint fullAddress = (uint)(((instruction & 0x01F0) << 13) | ((instruction & 0x0001) << 16) | nextWord.Value);
-                fullAddress *= 2;
-                return $"JMP 0x{fullAddress:X2}";
-            }
-            return "JMP (32-bit, incomplete)";
-        }
+        
         
         return $"UNKNOWN (0x{instruction:X4})";
     }
