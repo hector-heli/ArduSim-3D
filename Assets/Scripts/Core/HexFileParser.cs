@@ -320,6 +320,31 @@ public class HexFileParser : MonoBehaviour
 
         // Instrucciones de 32 bits
 
+
+        // CALL k (32-bit) - 1001 010k kkkk 111k + kkkk kkkk kkkk kkkk        
+        if ((instruction & 0xFE0E) == 0x940E)
+        {
+            ushort? nextWord = programMemory.ReadNextWord(address);
+            if (nextWord.HasValue)
+            {
+                uint k = (uint)((instruction & 0x01F1) << 16 | nextWord.Value);
+                return $"CALL 0x{k:X6}";
+            }
+            return "CALL (32-bit, incomplete)";
+        }
+
+        // JMP k (32-bit) - 1001 010k kkkk 110k  kkkk kkkk kkkk kkkk
+        if ((instruction & 0xFE0E) == 0x940C)
+        {
+            ushort? nextWord = programMemory.ReadNextWord(address);
+            if (nextWord.HasValue)
+            {
+                uint k = (uint)(((instruction & 0x01F0) << 13) | ((instruction & 0x0001) << 16) | nextWord.Value);
+                k *= 2;
+                return $"JMP 0x{k:X6}";
+            }
+            return "JMP (32-bit, incomplete)";
+        }
         // STS k,Rr - Store Direct to Data Space - 1001 001d dddd 0000 kkkk kkkk kkkk kkkk
         if ((instruction & 0xFE0F) == 0x9200)
         {
@@ -331,32 +356,7 @@ public class HexFileParser : MonoBehaviour
                 return $"STS 0x{fullAddress:X4}, R{rd}";
             }
         } 
-
-        // CALL k - 1001 010k kkkk 111k (primera palabra)
-        if ((instruction & 0xFE0E) == 0x940E)
-        {
-            ushort? nextWord = programMemory.ReadNextWord(address);
-            if (nextWord.HasValue)
-            {
-                uint fullAddress = (uint)((instruction & 0x01F1) << 16 | nextWord.Value);
-                return $"CALL 0x{fullAddress:X6}";
-            }
-            return "CALL (32-bit, incomplete)";
-        }
-
-        // JMP k (32-bit) - 1001 010k kkkk 110k  kkkk kkkk kkkk kkkk
-        if ((instruction & 0xFE0E) == 0x940C)
-        {
-            ushort? nextWord = programMemory.ReadNextWord(address);
-            if (nextWord.HasValue)
-            {
-                uint fullAddress = (uint)(((instruction & 0x01F0) << 13) | ((instruction & 0x0001) << 16) | nextWord.Value);
-                fullAddress *= 2;
-                return $"JMP 0x{fullAddress:X2}";
-            }
-            return "JMP (32-bit, incomplete)";
-        }
-        // LDS Load Direct from Data Space - 1001 000d dddd 0000 kkkk kkkk kkkk kkkk
+        // LDS k, Rd - Load Direct from Data Space - 1001 000d dddd 0000 kkkk kkkk kkkk kkkk
         if ((instruction & 0xFE0F) == 0x9000)
         {
             ushort? nextWord = programMemory.ReadNextWord(address);

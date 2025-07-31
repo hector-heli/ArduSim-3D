@@ -162,37 +162,69 @@ public class AVRSimulator : MonoBehaviour
             
         ushort instruction = hexParser.programMemory.ReadInstruction(programCounter);
         instructionCount++;
-        
-        // JMP (32-bit) - 1001 010k kkkk 110k + kkkk kkkk kkkk kkkk
-        if ((instruction & 0xFE0E) == 0x940C)
+
+        // Instrucciones de 32 bits
+
+        // CALL k (32-bit) - 1001 010k kkkk 111k + kkkk kkkk kkkk kkkk
+        if ((instruction & 0xFE0E) == 0x940E)
         {
             ushort nextWord = hexParser.programMemory.ReadInstruction((ushort)(programCounter + 2));
             uint k = (uint)(((instruction & 0x01F0) << 13) | ((instruction & 0x0001) << 16) | nextWord);
-            programCounter = (ushort)(k * 2);
-            
-            if (enableDebug && instructionCount < 50)
-                Debug.Log($"JMP 0x{k:X8}");
-                
-            return true;
-        }
-        
-        // CALL (32-bit) - 1001 010k kkkk 111k + kkkk kkkk kkkk kkkk
-        else if ((instruction & 0xFE0E) == 0x940E)
-        {
-            ushort nextWord = hexParser.programMemory.ReadInstruction((ushort)(programCounter + 2));
-            uint k = (uint)(((instruction & 0x01F0) << 13) | ((instruction & 0x0001) << 16) | nextWord);
-            
+
             // Guardar dirección de retorno en stack
             PushStack((ushort)((programCounter + 4) / 2));
-            
+
             // Saltar a la subrutina
             programCounter = (ushort)(k * 2);
-            
+
             if (enableDebug && instructionCount < 50)
-                Debug.Log($"CALL 0x{k:X4}");
-                
+                Debug.Log($"CALL 0x{k:X6}");
+
             return true;
         }
+
+        // JMP k (32-bit) - 1001 010k kkkk 110k + kkkk kkkk kkkk kkkk
+        else if ((instruction & 0xFE0E) == 0x940C)
+        {
+            ushort? nextWord = hexParser.programMemory.ReadNextWord(programCounter);
+            uint k = (uint)(((instruction & 0x01F0) << 13) | ((instruction & 0x0001) << 16) | nextWord);
+            programCounter += (ushort)(k * 2);
+
+            if (enableDebug && instructionCount < 50)
+                Debug.Log($"JMP 0x{programCounter:X4}");
+
+            return true;
+        }
+        // STS k,Rr - Store Direct to Data Space - 1001 001d dddd 0000 kkkk kkkk kkkk kkkk
+        else if ((instruction & 0xFE0F) == 0x9200)
+        {
+            ushort? nextWord = hexParser.programMemory.ReadNextWord(programCounter);
+            if (nextWord.HasValue)
+            {
+                byte rd = (byte)((instruction >> 4) & 0x1F);
+                ushort fullAddress = nextWord.Value;
+
+                Debug.Log($"STS 0x{fullAddress:X4}, R{rd} (valor: 0x{registers[rd]:X2})");
+                sram[fullAddress] = registers[rd];
+                return true;
+            }
+            return false;
+        }
+        // LDS Rd,k - Load Direct from Data Space - 1001 000d dddd 0000 kkkk kkkk kkkk kkkk
+        else if ((instruction & 0xFE0F) == 0x9000)
+        {
+            ushort? nextWord = hexParser.programMemory.ReadNextWord(programCounter);
+            if (nextWord.HasValue)
+            {
+                byte rd = (byte)((instruction >> 4) & 0x1F);
+                ushort k = nextWord.Value;
+                Debug.Log($"LDS R{rd}, 0x{k:X4}");
+                registers[rd] = sram[k];
+                return true;
+            }
+            return false;
+        }
+
         else
         {
             // Instrucciones de 16 bits
@@ -304,18 +336,7 @@ public class AVRSimulator : MonoBehaviour
             
             return true;
         }
-
-        // JMP (32-bit) - 1001 010k kkkk 110k + kkkk kkkk kkkk kkkk
-        if ((instruction & 0xFE0E) == 0x940C)
-        {
-            ushort nextWord = hexParser.programMemory.ReadInstruction((ushort)(programCounter + 2));
-            uint k = (uint)(((instruction & 0x01F0) << 13) | ((instruction & 0x0001) << 16) | nextWord);
-            programCounter = (ushort)(k * 2); // Salta a la dirección absoluta (en bytes)
-            if (enableDebug && instructionCount < 50)
-                Debug.Log($"JMP 0x{k:X4}");
-            return true;
-        }
-                
+              
         // Simular delay usando una función especial
         // Esto es una simplificación para el programa Blink
         if (programCounter >= 0x160 && programCounter <= 0x180) // Rango aproximado de delay
@@ -327,7 +348,7 @@ public class AVRSimulator : MonoBehaviour
         // Instrucción no implementada
         if (enableDebug && instructionCount < 100)
         {
-            Debug.Log($"Instrucción no implementada: 0x{instruction:X4} en PC: 0x{(programCounter - 2):X4}");
+            Debug.Log($"Instrucción no implementada: 0x{instruction:X4} en PC: 0x{(programCounter):X4}");
         }
         
         return true;
