@@ -56,5 +56,5 @@
         "temp/": true,
         "Temp/": true
     },
-    "dotnet.defaultSolution": "ArduSim-3D-main.sln"
+    "dotnet.defaultSolution": "ArduSim-3D.sln"
 }
